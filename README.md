@@ -1,5 +1,7 @@
 # agent-cred
 
+[![CI](https://github.com/andylizf/agent-cred/actions/workflows/ci.yml/badge.svg)](https://github.com/andylizf/agent-cred/actions/workflows/ci.yml)
+
 **A credential manager for AI agents.** Let an autonomous agent *use* your passwords — log
 into a site, hit an authenticated API, run a deploy — **without the secret ever entering the
 agent's context.** A human authorizes a specific vault item with one command; the agent then
@@ -164,6 +166,19 @@ Optional JSON at `~/.config/cred/config.json` (or `$CRED_CONFIG`). All keys opti
 The vault backend (Bitwarden) and the approval model (a human `unlock`) are behind clean
 seams. Future, if there's demand: other vault backends (1Password `op`, `pass`), and optional
 remote approval plugins (approve a fetch from your phone via Notion / Telegram / ntfy).
+
+## Development
+
+Tests are pure-stdlib (no dependencies). They run the **real daemon and CLI** against a fake
+`bw` (`tests/fake-bw`) backed by a JSON vault, so the whole flow — unlock, additive scopes,
+`with` (`-c` and `--`), `get` refusal, `find`, `sync` — is exercised without real Bitwarden or
+a network:
+
+```bash
+python3 -m unittest discover -s tests -p 'test_*.py' -v
+```
+
+CI runs this on Ubuntu and macOS across Python 3.9 and 3.12.
 
 ## License
 

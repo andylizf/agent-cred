@@ -1,0 +1,12 @@
+[
+  {"id": "id-github", "name": "github.com",
+   "login": {"username": "me", "password": "gh-secret", "uris": [{"uri": "https://github.com"}]}},
+  {"id": "id-aws", "name": "aws-prod",
+   "login": {"username": "root", "password": "aws-secret", "uris": []}},
+  {"id": "id-dup1", "name": "dup.example",
+   "login": {"username": "a", "password": "d1", "uris": [{"uri": "https://dup.example"}]}},
+  {"id": "id-dup2", "name": "dup.example",
+   "login": {"username": "b", "password": "d2", "uris": [{"uri": "https://dup.example"}]}},
+  {"id": "id-nopw", "name": "nopw-item",
+   "login": {"username": "x", "uris": []}}
+]
