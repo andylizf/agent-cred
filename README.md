@@ -106,12 +106,10 @@ variable of the command it runs. There are two forms:
   expands. Use it when a tool only accepts the value as an **argument**
   (e.g. `curl -u "user:$CRED"`). `cred` supplies the shell — you never write `bash -c` yourself.
 
-> A literal `$CRED` only expands inside a shell. Passing `-- sometool '$CRED'` (no shell) would
-> send the characters `$CRED` verbatim — a silent wrong-value bug — so `cred` **refuses** it and
-> points you at the `-c` form. If the tool expands `$CRED` from its own environment *on purpose*
-> (e.g. `envsubst`, a templater), pass `--force` before `--` to keep the literal:
-> `cred with <item> --force -- envsubst`. Never `echo`/`cat`/`print` `$CRED`, and never hide it
-> in a script `cred` can't see.
+> A literal `$CRED` only expands inside a shell. If a tool needs the value as an argument, use
+> the **`-c` form** so a shell expands it. The `-- <argv>` form runs with no shell, so a literal
+> `$CRED` there is passed verbatim (you'd send the string `$CRED`, not the secret). Never
+> `echo`/`cat`/`print` `$CRED`, and never hide it in a script `cred` can't see.
 
 The agent contract, machine-readable:
 
