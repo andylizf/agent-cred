@@ -85,7 +85,8 @@ class RealBwAccount(unittest.TestCase):
                 pass
         if self.item_id:
             try:
-                self._bw("delete", "item", self.item_id, "--session", self.session)
+                # --permanent: skip Trash, so repeated CI runs never accumulate cruft
+                self._bw("delete", "item", self.item_id, "--permanent", "--session", self.session)
             except Exception:
                 pass
         try:
