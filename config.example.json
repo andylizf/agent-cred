@@ -1,0 +1,7 @@
+{
+  "run_dir": "~/.cred",
+  "autolock_hours": 8,
+  "sync_ttl_seconds": 60,
+  "proxy": null,
+  "bw_bin": "bw"
+}

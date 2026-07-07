@@ -1,0 +1,9 @@
+# Runtime state — never commit. These live in the user's run_dir, but ignore here too
+# in case anyone points run_dir at the repo or copies artifacts in.
+*.sock
+catalog.json
+broker.log
+*.log
+config.json
+__pycache__/
+*.pyc

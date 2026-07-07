@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""cred — client for the credential broker (agent-cred).
+
+Secret-safe usage. The rule: a fetched secret is WRITE-ONLY — flow it INTO a command,
+never OUT to your stdout/context.
+
+  cred find <query>                         FREE — names/usernames/uris only, NO passwords.
+  cred with <id|name> -- <cmd using $CRED>  fetch an AUTHORIZED item → inject as $CRED into
+                                            <cmd> → run it. cred prints nothing; you see only
+                                            <cmd>'s output. In <cmd> reference "$CRED";
+                                            NEVER echo/cat/print it.
+  cred get <id|name>                        ⚠ prints the raw secret → ENTERS YOUR CONTEXT.
+                                            Human terminal ONLY (refused when stdout isn't a TTY).
+
+Human/session management:
+  cred unlock <item> [item2 ...]  authorize items (asks for the Bitwarden master password).
+  cred status | cred lock | cred sync
+
+Every response starts with a machine-readable line `cred: <STATE> ...`. Lines starting
+with `→ agent:` or `→ human:` tell you the single next action. Read the FULL output and do
+what it says; never grep it away, never wrap `cred with` in a `timeout`.
+"""
+import getpass, json, os, socket, sys
+
+HOME = os.path.expanduser("~")
+
+
+def run_dir():
+    path = os.environ.get("CRED_CONFIG") or os.path.join(HOME, ".config", "cred", "config.json")
+    try:
+        with open(path) as f:
+            rd = json.load(f).get("run_dir")
+            if rd:
+                return os.path.expanduser(rd)
+    except Exception:
+        pass
+    return os.path.join(HOME, ".cred")
+
+
+SOCK = os.path.join(run_dir(), "cred.sock")
+
+DISCIPLINE = ("cred rule: a secret is WRITE-ONLY — use `cred with <id> -- <cmd using $CRED>`; "
+              "reference \"$CRED\", NEVER echo/cat/print it. `cred get` is human-terminal only.\n")
+
+HELP = __doc__
+
+
+def call(req):
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.connect(SOCK)
+    except Exception:
+        sys.exit("cred: broker not running at %s (start cred-brokerd)" % SOCK)
+    s.sendall((json.dumps(req) + "\n").encode())
+    buf = b""
+    while not buf.endswith(b"\n"):
+        c = s.recv(65536)
+        if not c:
+            break
+        buf += c
+    s.close()
+    return json.loads(buf.decode() or "{}")
+
+
+def out(line):
+    sys.stdout.write(line + "\n")
+
+
+def fmt_scopes(scopes):
+    return "[" + ", ".join(scopes) + "]" if scopes else "[]"
+
+
+def render_error(r, item=""):
+    """Print a hybrid error for a failed get/with; return the exit code to use."""
+    sys.stderr.write(DISCIPLINE)
+    err = r.get("error", "failed")
+    item = r.get("item") or item
+    if err == "locked":
+        out("cred: LOCKED  item=%s" % item)
+        out("The vault has no session (locked or timed out); nothing is authorized.")
+        out("  → human: cred unlock %s   (you'll be asked for the Bitwarden master password)" % item)
+        out("  → agent: after the human unlocks, re-run this exact command.")
+    elif err == "not-authorized":
+        authd = r.get("authorized", [])
+        out("cred: DENIED  item=%s  reason=not-authorized  authorized=%s" % (item, fmt_scopes(authd)))
+        out("This session authorizes only the items above. Unlocking %s will NOT evict them." % item)
+        out("  → human: cred unlock %s" % item)
+        out("  → agent: after the human unlocks, re-run this exact command.")
+    elif err == "not-found":
+        out("cred: NOT-FOUND  item=%s" % item)
+        out("No vault item matches that. If you just added it, the cache may be stale.")
+        out("  → agent: try `cred find %s` for the exact name/id, or `cred sync` then retry." % item)
+    elif err == "ambiguous":
+        out("cred: AMBIGUOUS  item=%s" % item)
+        out("More than one vault item matches that name.")
+        out("  → agent: use the exact id — run `cred find %s` to get it." % item)
+    else:
+        out("cred: ERROR  item=%s  reason=%s" % (item, err))
+        if r.get("detail"):
+            out("  detail: %s" % r["detail"])
+    return 2
+
+
+def main():
+    a = sys.argv[1:]
+    if not a or a[0] in ("help", "-h", "--help"):
+        sys.stdout.write(HELP)
+        return
+    cmd = a[0]
+
+    if cmd == "unlock":
+        items = [x for x in a[1:] if x.strip()]
+        if not items:
+            sys.exit("usage: cred unlock <item> [item2 ...]   (authorize one or more vault items)")
+        pw = getpass.getpass("Bitwarden master password: ")
+        r = call({"cmd": "unlock", "password": pw, "items": items})
+        if not r.get("ok"):
+            out("cred: ERROR  reason=%s" % r.get("error", "unlock-failed"))
+            if r.get("detail"):
+                out("  detail: %s" % r["detail"])
+            sys.exit(2)
+        scopes = r.get("scopes", [])
+        out("cred: UNLOCKED  scopes=%s  ttl=%sh" % (fmt_scopes(scopes), r.get("ttl_hours")))
+        out("Authorized items stay fetchable (no password, no prompt) until they auto-lock "
+            "in ~%sh or you run `cred lock`." % r.get("ttl_hours"))
+        out("  → agent: cred with <id> -- <cmd using \"$CRED\">")
+
+    elif cmd == "lock":
+        r = call({"cmd": "lock"})
+        out("cred: LOCKED" if r.get("ok") else "cred: ERROR")
+
+    elif cmd == "status":
+        r = call({"cmd": "status"})
+        if r.get("unlocked"):
+            ttl = "%.1fh" % (r.get("seconds_left", 0) / 3600.0)
+            age = r.get("sync_age")
+            age_s = ("%ds ago" % age) if age is not None else "never"
+            out("cred: UNLOCKED  scopes=%s  ttl=%s  last_sync=%s" % (fmt_scopes(r.get("scopes", [])), ttl, age_s))
+            out("Authorized items stay fetchable (no prompt) until they auto-lock in %s." % ttl)
+            out("  → human: authorize another item with  cred unlock <item>")
+            out("  → agent: use one with  cred with <id> -- <cmd using \"$CRED\">")
+        else:
+            out("cred: LOCKED")
+            out("No item is authorized; the vault is locked.")
+            out("  → human: cred unlock <item>   (you'll be asked for the Bitwarden master password)")
+
+    elif cmd == "sync":
+        r = call({"cmd": "sync"})
+        if r.get("ok"):
+            out("cred: SYNCED  count=%s" % r.get("count"))
+        else:
+            out("cred: ERROR  reason=%s" % r.get("error"))
+            if r.get("error") == "locked":
+                out("  → human: cred unlock <item> first (sync needs an open session).")
+
+    elif cmd == "find":
+        r = call({"cmd": "find", "query": " ".join(a[1:])})
+        items = r.get("items", [])
+        out("cred: FOUND  matches=%d  (metadata only — no passwords)" % len(items))
+        for it in items:
+            out("%s  %s  | user=%s  | %s" % (it["id"], it.get("name", ""), it.get("username") or "-",
+                                             ",".join(filter(None, it.get("uris") or [])) or "-"))
+        if not items:
+            out(r.get("note") or ("(no items match \"%s\"; if you just added it, run `cred sync` "
+                                  "or ask the human to `cred unlock <item>`)" % " ".join(a[1:])))
+        else:
+            out("  → agent: cred with <id> -- <cmd using \"$CRED\">   "
+                "(the item must be authorized; if DENIED, relay the `cred unlock` to the human)")
+
+    elif cmd == "with":
+        if "--" not in a or len(a) < 4:
+            sys.exit('usage: cred with <id|name> -- <command using $CRED>  '
+                     '(e.g. ... -- bash -lc \'curl -u u:"$CRED" https://api/...\')')
+        sep = a.index("--")
+        item = a[1]
+        child = a[sep + 1:]
+        if not child:
+            sys.exit("cred with: no command after --")
+        requester = os.environ.get("CRED_REQUESTER", "an agent")
+        r = call({"cmd": "get", "item": item, "requester": requester})
+        if "secret" not in r:
+            sys.exit(render_error(r, item))
+        sys.stderr.write("cred: OK  item=%s  (secret injected as $CRED; cred never printed it)\n" % r.get("item", item))
+        env = dict(os.environ)
+        env["CRED"] = r["secret"]
+        os.execvpe(child[0], child, env)              # child inherits $CRED; cred outputs nothing itself
+
+    elif cmd == "get":
+        if len(a) < 2:
+            sys.exit("usage: cred get <id|name>   (human terminal only)")
+        sys.stderr.write(DISCIPLINE)
+        # Secure-by-construction: refuse unless a real human TTY. An agent's stdout is a pipe →
+        # refused → it cannot pull a raw secret into its context; it must use `cred with`.
+        if not sys.stdout.isatty() and "--force" not in a:
+            sys.exit("cred: REFUSED  reason=not-a-tty\n`cred get` prints the raw secret and is human-terminal only. "
+                     "Use `cred with <id|name> -- <cmd using $CRED>` so the secret never enters your context.")
+        r = call({"cmd": "get", "item": a[1], "requester": os.environ.get("CRED_REQUESTER", "a human")})
+        if "secret" in r:
+            print(r["secret"])
+        else:
+            sys.exit(render_error(r, a[1]))
+
+    else:
+        sys.exit("cred: unknown command %r  (try `cred help`)" % cmd)
+
+
+if __name__ == "__main__":
+    main()
