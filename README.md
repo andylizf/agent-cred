@@ -107,9 +107,11 @@ variable of the command it runs. There are two forms:
   (e.g. `curl -u "user:$CRED"`). `cred` supplies the shell — you never write `bash -c` yourself.
 
 > A literal `$CRED` only expands inside a shell. Passing `-- sometool '$CRED'` (no shell) would
-> send the four characters `$CRED` verbatim — a silent wrong-value bug — so `cred` **refuses**
-> it and points you at the `-c` form. Never `echo`/`cat`/`print` `$CRED`, and never hide it in a
-> script `cred` can't see.
+> send the characters `$CRED` verbatim — a silent wrong-value bug — so `cred` **refuses** it and
+> points you at the `-c` form. If the tool expands `$CRED` from its own environment *on purpose*
+> (e.g. `envsubst`, a templater), pass `--force` before `--` to keep the literal:
+> `cred with <item> --force -- envsubst`. Never `echo`/`cat`/`print` `$CRED`, and never hide it
+> in a script `cred` can't see.
 
 The agent contract, machine-readable:
 

@@ -181,23 +181,29 @@ def main():
                  '  cred with <id|name> -- <argv…>                            # exec directly; best when the\n'
                  '                                                            # tool reads $CRED from its env')
         item = a[1] if len(a) > 1 else None
+        force = False
         if len(a) >= 4 and a[2] == "-c":                      # sugar: cred supplies the shell → $CRED expands
-            cmd_str = " ".join(a[3:])
-            child = ["sh", "-c", cmd_str]
+            child = ["sh", "-c", " ".join(a[3:])]
         elif item and "--" in a and len(a) > a.index("--") + 1:
-            child = a[a.index("--") + 1:]                     # direct exec of argv (no shell)
+            sep = a.index("--")
+            force = "--force" in a[2:sep]                     # opt out of the footgun guard (see below)
+            child = a[sep + 1:]                               # direct exec of argv (no shell)
         else:
             sys.exit(USAGE)
         # Footgun guard (before we even fetch): $CRED is expanded by a shell, not by cred. If a
         # literal "$CRED" is handed to a non-shell command it is passed verbatim — a silent
-        # wrong-value bug (e.g. typing the string "$CRED" into a form). Refuse with the fix.
-        if os.path.basename(child[0]) not in SHELLS and any("$CRED" in tok for tok in child):
+        # wrong-value bug (e.g. typing "$CRED" into a form). Refuse unless --force: some tools
+        # (envsubst, templaters) expand $CRED from their own env on purpose, and that's valid.
+        if not force and os.path.basename(child[0]) not in SHELLS and any("$CRED" in tok for tok in child):
             sys.stderr.write(DISCIPLINE)
             out("cred: REFUSED  reason=literal-$CRED-to-non-shell  cmd=%s" % os.path.basename(child[0]))
-            out("\"$CRED\" is only expanded by a shell, and %r is not one — it would receive the literal"
+            out("\"$CRED\" is only expanded by a shell, and %r is not one — it would get the literal text"
                 % os.path.basename(child[0]))
-            out("text \"$CRED\" (a silent wrong-value bug), not the secret. Let cred supply the shell:")
-            out("  → agent: cred with %s -c '%s'" % (item, " ".join(child)))
+            out("\"$CRED\" (a silent wrong-value bug), not the secret. Pick one:")
+            out("  → agent: cred with %s -c '%s'          # let a shell expand \"$CRED\" (usual fix)"
+                % (item, " ".join(child)))
+            out("  → agent: cred with %s --force -- %s    # ONLY if %s expands $CRED from its own env"
+                % (item, " ".join(child), os.path.basename(child[0])))
             sys.exit(2)
         requester = os.environ.get("CRED_REQUESTER", "an agent")
         r = call({"cmd": "get", "item": item, "requester": requester})
