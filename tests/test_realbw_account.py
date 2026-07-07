@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
-"""Full real-vault integration: daemon + cred against REAL Bitwarden, using a throwaway
-test account. Seeds a login item, verifies `cred with` returns the EXACT secret (compared
-by sha256 — the value is never printed), then deletes the item and logs out.
+"""Full real-vault integration: daemon + cred against REAL Bitwarden.
 
-Runs only when `bw` is installed AND TEST_BITWARDEN_ACCOUNT / TEST_BITWARDEN_PASSWORD are in
-the environment; otherwise it skips. In CI those come from repo secrets (a push-only job). If
-BW_CLIENTID / BW_CLIENTSECRET are also set, login uses the API key (avoids datacenter-IP
-captcha); otherwise it falls back to email+password login.
+READ-ONLY. It logs into a test account that has a pre-seeded, stable login item and verifies
+the whole path — unlock, `cred with` returning the EXACT secret (compared by sha256, never
+printed), an unauthorized fetch being denied, and `find` — without creating or deleting
+anything. Nothing to clean up, so repeated CI runs never touch the account's contents.
+
+Runs only when all of these are set (from repo secrets in a push-only CI job); otherwise skips:
+  TEST_BITWARDEN_ACCOUNT        the account email
+  TEST_BITWARDEN_PASSWORD       its master password
+  TEST_BITWARDEN_ITEM           name/id of the pre-seeded login item (e.g. "agent-cred-ci")
+  TEST_BITWARDEN_SECRET_SHA256  sha256 hex of that item's password
+Optional: BW_CLIENTID / BW_CLIENTSECRET to log in by API key (avoids datacenter-IP captcha).
 """
 import hashlib, json, os, shutil, subprocess, sys, tempfile, time, unittest
 
@@ -17,10 +22,12 @@ DAEMON = os.path.join(REPO, "cred-brokerd.py")
 BW = shutil.which("bw")
 ACCOUNT = os.environ.get("TEST_BITWARDEN_ACCOUNT")
 PASSWORD = os.environ.get("TEST_BITWARDEN_PASSWORD")
+ITEM = os.environ.get("TEST_BITWARDEN_ITEM")
+SHA = os.environ.get("TEST_BITWARDEN_SECRET_SHA256")
 
 
-@unittest.skipUnless(BW and ACCOUNT and PASSWORD,
-                     "needs real bw + TEST_BITWARDEN_ACCOUNT/PASSWORD")
+@unittest.skipUnless(BW and ACCOUNT and PASSWORD and ITEM and SHA,
+                     "needs real bw + TEST_BITWARDEN_ACCOUNT/PASSWORD/ITEM/SECRET_SHA256")
 class RealBwAccount(unittest.TestCase):
     def _bw(self, *args, **kw):
         env = dict(self.bwenv)
@@ -28,8 +35,6 @@ class RealBwAccount(unittest.TestCase):
         return subprocess.run([BW, *args], capture_output=True, text=True, env=env, **kw)
 
     def setUp(self):
-        self.item_id = None
-        self.session = ""
         self.appdata = tempfile.mkdtemp(prefix="bwtest-")
         self.run_dir = tempfile.mkdtemp(prefix="bwrun-")
         self.bwenv = dict(os.environ)
@@ -38,26 +43,11 @@ class RealBwAccount(unittest.TestCase):
         if os.environ.get("BW_CLIENTID") and os.environ.get("BW_CLIENTSECRET"):
             r = self._bw("login", "--apikey", "--raw")
             self.assertEqual(r.returncode, 0, "apikey login failed: " + r.stderr)
-            u = self._bw("unlock", "--passwordenv", "TEST_BITWARDEN_PASSWORD", "--raw",
-                         env={"TEST_BITWARDEN_PASSWORD": PASSWORD})
-            self.session = u.stdout.strip()
-            self.assertTrue(self.session, "unlock failed: " + u.stderr)
         else:
             r = self._bw("login", ACCOUNT, "--passwordenv", "TEST_BITWARDEN_PASSWORD", "--raw",
                          env={"TEST_BITWARDEN_PASSWORD": PASSWORD})
-            self.session = r.stdout.strip()
-            self.assertTrue(self.session, "password login failed: " + r.stderr)
-
-        self.secret = "s3cr3t-%d-%d" % (int(time.time()), os.getpid())
-        self.name = "agent-cred-selftest-%d" % os.getpid()
-        item = json.dumps({"type": 1, "name": self.name, "notes": None, "favorite": False,
-                           "login": {"username": "tester", "password": self.secret,
-                                     "uris": [{"uri": "https://agent-cred.test"}]}})
-        enc = self._bw("encode", input=item)
-        cr = self._bw("create", "item", "--session", self.session, input=enc.stdout)
-        self.assertEqual(cr.returncode, 0, "seed failed: " + cr.stderr)
-        self.item_id = json.loads(cr.stdout)["id"]
-        self._bw("sync", "--session", self.session)
+            self.assertEqual(r.returncode, 0, "password login failed: " + r.stderr)
+        self._bw("sync")
 
         with open(os.path.join(self.run_dir, "config.json"), "w") as f:
             json.dump({"run_dir": self.run_dir, "bw_bin": BW, "proxy": None}, f)
@@ -83,14 +73,8 @@ class RealBwAccount(unittest.TestCase):
                 self.proc.kill()
             except Exception:
                 pass
-        if self.item_id:
-            try:
-                # --permanent: skip Trash, so repeated CI runs never accumulate cruft
-                self._bw("delete", "item", self.item_id, "--permanent", "--session", self.session)
-            except Exception:
-                pass
         try:
-            self._bw("logout")
+            self._bw("logout")           # read-only: nothing to delete
         except Exception:
             pass
         try:
@@ -107,27 +91,24 @@ class RealBwAccount(unittest.TestCase):
         return p.returncode, p.stdout, p.stderr
 
     def test_unlock_fetch_find(self):
-        rc, o, e = self.cred("unlock", self.item_id, pw=PASSWORD)
+        rc, o, e = self.cred("unlock", ITEM, pw=PASSWORD)
         self.assertIn("cred: UNLOCKED", o)
-        self.assertIn(self.item_id, o)
 
         # fetch and verify the EXACT secret by sha256 — the value is never printed
-        want = hashlib.sha256(self.secret.encode()).hexdigest()
-        rc, o, e = self.cred("with", self.item_id, "--", sys.executable, "-c",
+        rc, o, e = self.cred("with", ITEM, "--", sys.executable, "-c",
                              "import os,hashlib,sys;"
                              "sys.stdout.write(hashlib.sha256(os.environ['CRED'].encode()).hexdigest())")
-        self.assertEqual(o.strip(), want, "fetched secret hash mismatch (stderr: %s)" % e)
+        self.assertEqual(o.strip(), SHA, "fetched secret hash mismatch (stderr: %s)" % e)
 
-        # unauthorized item is denied
+        # an unauthorized item is denied
         rc, o, e = self.cred("with", "no-such-item-xyz", "-c", 'printf "%s" "$CRED"')
         self.assertIn("cred:", o)
         self.assertNotEqual(rc, 0)
 
         # find returns metadata only
-        rc, o, e = self.cred("find", self.name)
+        rc, o, e = self.cred("find", ITEM)
         self.assertTrue(o.startswith("cred: FOUND"), o)
-        self.assertIn(self.item_id, o)
-        self.assertNotIn(self.secret, o)
+        self.assertIn(ITEM, o)
 
 
 if __name__ == "__main__":
