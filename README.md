@@ -90,8 +90,26 @@ have it) can never expand its own authorization.
 
 ```bash
 cred find stripe                            # discover items (metadata only, no secrets)
-cred with stripe-prod -- curl -u "u:$CRED" https://api.stripe.com/v1/charges
+
+# Two ways to consume the secret — pick by how the target tool takes its value:
+cred with stripe-prod -- deploy-tool        # tool reads $CRED from its ENV — safest (no argv/ps leak)
+cred with stripe-prod -c 'curl -u "user:$CRED" https://api.stripe.com/v1/charges'   # tool needs it as an arg
 ```
+
+**Getting the secret into a command.** `cred` injects the secret as the `$CRED` environment
+variable of the command it runs. There are two forms:
+
+- `cred with <item> -- <argv…>` execs the command **directly, with no shell**. Use it when the
+  tool reads `$CRED` from its **environment**. The secret never appears in the command line, so
+  it can't leak via `ps`. This is the preferred form.
+- `cred with <item> -c '<shell command>'` runs the command **in a shell**, so `"$CRED"`
+  expands. Use it when a tool only accepts the value as an **argument**
+  (e.g. `curl -u "user:$CRED"`). `cred` supplies the shell — you never write `bash -c` yourself.
+
+> A literal `$CRED` only expands inside a shell. Passing `-- sometool '$CRED'` (no shell) would
+> send the four characters `$CRED` verbatim — a silent wrong-value bug — so `cred` **refuses**
+> it and points you at the `-c` form. Never `echo`/`cat`/`print` `$CRED`, and never hide it in a
+> script `cred` can't see.
 
 The agent contract, machine-readable:
 
@@ -101,8 +119,6 @@ The agent contract, machine-readable:
 - Lines beginning `→ agent:` or `→ human:` give the **single next action**. If a fetch is
   `DENIED` (item not authorized), relay the exact `cred unlock <item>` to the human, then
   re-run your command.
-- In the `<cmd>` after `--`, reference `"$CRED"`. **Never** `echo`/`cat`/`print` it, and never
-  hide it inside a script `cred` can't see.
 
 ## Freshness
 

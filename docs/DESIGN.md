@@ -56,9 +56,15 @@ Agents must not need to memorize a mental model. Every response is self-containe
 
 ## Secret-safety invariants
 
-- `cred with <item> -- <cmd>` fetches the secret, sets it as `$CRED` in the child env, and
-  `execvpe`s the child. `cred` prints nothing on success beyond a one-line `cred: OK` to
-  stderr; the plaintext never reaches its stdout.
+- `cred with <item>` fetches the secret, sets it as `$CRED` in the child env, and `execvpe`s
+  the child. `cred` prints nothing on success beyond a one-line `cred: OK` to stderr; the
+  plaintext never reaches its stdout. Two forms: `-- <argv…>` execs directly (no shell — best
+  when the tool reads `$CRED` from its env, keeping the secret out of argv/`ps`); `-c '<cmd>'`
+  runs under `sh -c` so `"$CRED"` expands (for tools that take the value as an argument, without
+  the caller writing `bash -c`).
+- **Footgun guard:** `$CRED` is expanded only by a shell. A literal `$CRED` passed to a
+  non-shell argv (`-- tool '$CRED'`) would be sent verbatim — a *silent* wrong-value bug — so
+  the CLI refuses it before fetching and points at the `-c` form.
 - `cred get` prints plaintext and refuses unless stdout is a TTY (`--force` overrides, for
   humans). An agent's piped stdout is thus physically blocked from pulling plaintext.
 - `find` returns metadata only (id/name/username/uris); the catalog cache holds no passwords.

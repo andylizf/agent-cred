@@ -5,10 +5,14 @@ Secret-safe usage. The rule: a fetched secret is WRITE-ONLY — flow it INTO a c
 never OUT to your stdout/context.
 
   cred find <query>                         FREE — names/usernames/uris only, NO passwords.
-  cred with <id|name> -- <cmd using $CRED>  fetch an AUTHORIZED item → inject as $CRED into
-                                            <cmd> → run it. cred prints nothing; you see only
-                                            <cmd>'s output. In <cmd> reference "$CRED";
-                                            NEVER echo/cat/print it.
+  cred with <id|name> -c '<cmd using "$CRED">'  fetch an AUTHORIZED item → run <cmd> IN A SHELL
+                                            with the secret as $CRED. Use when a tool needs the
+                                            value as an ARGUMENT. Reference "$CRED"; NEVER print it.
+  cred with <id|name> -- <argv…>            fetch → exec argv DIRECTLY (no shell). Best when the
+                                            tool reads $CRED from its ENVIRONMENT — the secret
+                                            then never appears in argv or in `ps`.
+                                            (cred prints nothing on success; you see only the
+                                            command's own output.)
   cred get <id|name>                        ⚠ prints the raw secret → ENTERS YOUR CONTEXT.
                                             Human terminal ONLY (refused when stdout isn't a TTY).
 
@@ -23,6 +27,10 @@ what it says; never grep it away, never wrap `cred with` in a `timeout`.
 import getpass, json, os, socket, sys
 
 HOME = os.path.expanduser("~")
+
+# $CRED only expands inside a shell. If the child after `--` is one of these, we trust it to
+# expand "$CRED"; otherwise a literal "$CRED" argument is a silent wrong-value footgun.
+SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "ash", "fish"}
 
 
 def run_dir():
@@ -168,14 +176,29 @@ def main():
                 "(the item must be authorized; if DENIED, relay the `cred unlock` to the human)")
 
     elif cmd == "with":
-        if "--" not in a or len(a) < 4:
-            sys.exit('usage: cred with <id|name> -- <command using $CRED>  '
-                     '(e.g. ... -- bash -lc \'curl -u u:"$CRED" https://api/...\')')
-        sep = a.index("--")
-        item = a[1]
-        child = a[sep + 1:]
-        if not child:
-            sys.exit("cred with: no command after --")
+        USAGE = ('usage:\n'
+                 '  cred with <id|name> -c \'<shell command using "$CRED">\'   # cred runs it in a shell\n'
+                 '  cred with <id|name> -- <argv…>                            # exec directly; best when the\n'
+                 '                                                            # tool reads $CRED from its env')
+        item = a[1] if len(a) > 1 else None
+        if len(a) >= 4 and a[2] == "-c":                      # sugar: cred supplies the shell → $CRED expands
+            cmd_str = " ".join(a[3:])
+            child = ["sh", "-c", cmd_str]
+        elif item and "--" in a and len(a) > a.index("--") + 1:
+            child = a[a.index("--") + 1:]                     # direct exec of argv (no shell)
+        else:
+            sys.exit(USAGE)
+        # Footgun guard (before we even fetch): $CRED is expanded by a shell, not by cred. If a
+        # literal "$CRED" is handed to a non-shell command it is passed verbatim — a silent
+        # wrong-value bug (e.g. typing the string "$CRED" into a form). Refuse with the fix.
+        if os.path.basename(child[0]) not in SHELLS and any("$CRED" in tok for tok in child):
+            sys.stderr.write(DISCIPLINE)
+            out("cred: REFUSED  reason=literal-$CRED-to-non-shell  cmd=%s" % os.path.basename(child[0]))
+            out("\"$CRED\" is only expanded by a shell, and %r is not one — it would receive the literal"
+                % os.path.basename(child[0]))
+            out("text \"$CRED\" (a silent wrong-value bug), not the secret. Let cred supply the shell:")
+            out("  → agent: cred with %s -c '%s'" % (item, " ".join(child)))
+            sys.exit(2)
         requester = os.environ.get("CRED_REQUESTER", "an agent")
         r = call({"cmd": "get", "item": item, "requester": requester})
         if "secret" not in r:
