@@ -20,5 +20,26 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Syntax check
         run: python -m py_compile cred cred-brokerd.py tests/fake-bw tests/test_e2e.py
-      - name: Tests
+      - name: Tests (fake bw)
         run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+  realbw:
+    # Integration against the REAL, version-pinned Bitwarden CLI (no account needed:
+    # validates the binary, flags, and our error handling).
+    runs-on: ubuntu-latest
+    env:
+      BW_VERSION: 2026.6.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install pinned Bitwarden CLI
+        run: npm install -g @bitwarden/cli@${BW_VERSION}
+      - name: Confirm pinned version
+        run: test "$(bw --version)" = "${BW_VERSION}"
+      - name: Integration (real bw)
+        run: python -m unittest tests.test_realbw -v

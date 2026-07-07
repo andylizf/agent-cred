@@ -178,7 +178,13 @@ a network:
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
-CI runs this on Ubuntu and macOS across Python 3.9 and 3.12.
+CI runs this on Ubuntu and macOS across Python 3.9 and 3.12. A separate job also runs an
+integration smoke against the **real, version-pinned Bitwarden CLI** (`@bitwarden/cli@2026.6.0`)
+to catch drift in the binary, flags, or error output. `tests/test_realbw.py` skips itself when
+`bw` isn't installed, so local runs and the fake-bw job are unaffected.
+
+Success paths against a live vault (unlock/get/find) need a real account and are out of scope
+for CI here; the fake-bw suite covers that behavior deterministically.
 
 ## License
 
