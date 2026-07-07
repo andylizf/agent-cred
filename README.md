@@ -183,8 +183,11 @@ integration smoke against the **real, version-pinned Bitwarden CLI** (`@bitwarde
 to catch drift in the binary, flags, or error output. `tests/test_realbw.py` skips itself when
 `bw` isn't installed, so local runs and the fake-bw job are unaffected.
 
-Success paths against a live vault (unlock/get/find) need a real account and are out of scope
-for CI here; the fake-bw suite covers that behavior deterministically.
+A further **push-only** job (`tests/test_realbw_account.py`) runs the full lifecycle against a
+real, throwaway Bitwarden test account: it seeds a login item, checks `cred with` returns the
+exact secret (compared by sha256 — never printed), and deletes the item afterward. It skips
+unless `TEST_BITWARDEN_ACCOUNT` / `TEST_BITWARDEN_PASSWORD` are set, and is push-only so those
+secrets are never exposed to pull requests or forks.
 
 ## License
 

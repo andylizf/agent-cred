@@ -43,3 +43,27 @@ jobs:
         run: test "$(bw --version)" = "${BW_VERSION}"
       - name: Integration (real bw)
         run: python -m unittest tests.test_realbw -v
+
+  realbw-account:
+    # Full real-vault integration against a throwaway Bitwarden test account.
+    # push-only so the account secrets are never exposed to pull requests / forks.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      BW_VERSION: 2026.6.0
+      TEST_BITWARDEN_ACCOUNT: ${{ secrets.TEST_BITWARDEN_ACCOUNT }}
+      TEST_BITWARDEN_PASSWORD: ${{ secrets.TEST_BITWARDEN_PASSWORD }}
+      BW_CLIENTID: ${{ secrets.BW_CLIENTID }}
+      BW_CLIENTSECRET: ${{ secrets.BW_CLIENTSECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install pinned Bitwarden CLI
+        run: npm install -g @bitwarden/cli@${BW_VERSION}
+      - name: Full integration (seeds + deletes a throwaway item)
+        run: python -m unittest tests.test_realbw_account -v
