@@ -136,11 +136,13 @@ def main():
     elif cmd == "status":
         r = call({"cmd": "status"})
         if r.get("unlocked"):
-            ttl = "%.1fh" % (r.get("seconds_left", 0) / 3600.0)
+            left = r.get("seconds_left")
+            ttl = "never (autolock off)" if left is None else "%.1fh" % (left / 3600.0)
             age = r.get("sync_age")
             age_s = ("%ds ago" % age) if age is not None else "never"
             out("cred: UNLOCKED  scopes=%s  ttl=%s  last_sync=%s" % (fmt_scopes(r.get("scopes", [])), ttl, age_s))
-            out("Authorized items stay fetchable (no prompt) until they auto-lock in %s." % ttl)
+            out("Authorized items stay fetchable (no prompt) until %s." %
+                ("you run `cred lock`" if left is None else "they auto-lock in " + ttl))
             out("  → human: authorize another item with  cred unlock <item>")
             out("  → agent: use one with  cred with <id> -- <cmd using \"$CRED\">")
         else:

@@ -198,7 +198,10 @@ def handle(req):
             left = (max(0, AUTOLOCK_HOURS * 3600 - (time.time() - state["unlocked_at"])) if unlocked else 0) if AUTOLOCK_HOURS > 0 else None
             scopes = sorted(state["scopes"])
             sync_age = int(time.time() - state["last_sync"]) if state["last_sync"] else None
-        return {"unlocked": session_ok(), "seconds_left": int(left), "scopes": scopes, "sync_age": sync_age}
+        # left is None when the autolock timer is off; int(None) raised here and took the
+        # whole status response with it, so every healthy always-on vault reported LOCKED.
+        return {"unlocked": session_ok(), "seconds_left": (int(left) if left is not None else None),
+                "scopes": scopes, "sync_age": sync_age}
 
     if cmd == "sync":
         if not session_ok():

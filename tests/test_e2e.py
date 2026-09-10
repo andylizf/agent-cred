@@ -16,10 +16,12 @@ PW = "correct-pw"
 
 
 class E2E(unittest.TestCase):
+    AUTOLOCK_HOURS = 8          # subclasses override; 0 disables the timer entirely
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="credtest-")
         cfg = {"run_dir": self.tmp, "bw_bin": FAKE_BW, "proxy": None,
-               "autolock_hours": 8, "sync_ttl_seconds": 60}
+               "autolock_hours": self.AUTOLOCK_HOURS, "sync_ttl_seconds": 60}
         self.cfg_path = os.path.join(self.tmp, "config.json")
         with open(self.cfg_path, "w") as f:
             json.dump(cfg, f)
@@ -171,6 +173,25 @@ class E2E(unittest.TestCase):
         rc, o, e = self.cred("unlock")
         self.assertNotEqual(rc, 0)
         self.assertIn("usage", (o + e).lower())
+
+
+class AutolockDisabled(E2E):
+    """autolock_hours = 0: the always-on configuration."""
+    AUTOLOCK_HOURS = 0
+
+    def test_status_reports_unlocked_with_the_timer_off(self):
+        # seconds_left is None here. int(None) used to raise inside the daemon, so status
+        # answered with an error and the CLI rendered a perfectly healthy vault as LOCKED
+        # — which is also the string the vault watchdog greps for, so it alerted forever.
+        self.cred("unlock", "github.com", pw=PW)
+        rc, o, e = self.cred("status")
+        self.assertTrue(o.startswith("cred: UNLOCKED"), o)
+        self.assertIn("never (autolock off)", o)
+
+    def test_fetch_still_works_with_the_timer_off(self):
+        self.cred("unlock", "github.com", pw=PW)
+        rc, o, e = self.cred("with", "github.com", "-c", 'printf %s "$CRED"')
+        self.assertEqual(o, "gh-secret")
 
 
 if __name__ == "__main__":
