@@ -119,7 +119,10 @@ def session_ok():
     with slock:
         if not state["session"]:
             return False
-        if time.time() - state["unlocked_at"] > AUTOLOCK_HOURS * 3600:
+        # autolock_hours <= 0 means never: this box is always-on and the human who
+        # would retype the master password is usually asleep in another time zone,
+        # so a timer here does not add safety, it just parks the machine.
+        if AUTOLOCK_HOURS > 0 and time.time() - state["unlocked_at"] > AUTOLOCK_HOURS * 3600:
             state["session"] = None
             state["scopes"] = set()
             log("auto-locked (timeout)")
@@ -139,11 +142,21 @@ def item_and_scope(item):
         if "more than one" in detail or "multiple" in detail:
             return None, False, "ambiguous"
         return None, False, "not-found"
-    it = json.loads(r.stdout or "{}")
+    if not (r.stdout or "").strip():
+        # An empty body with rc=0 is what a dead session looks like from here — bw was
+        # unlocked again elsewhere, which invalidates the one this daemon holds. Saying
+        # "no password" instead reads as data loss, and once nearly was reported as a
+        # destroyed vault. Name the session.
+        return None, False, "session-invalid"
+    it = json.loads(r.stdout)
     hay = " ".join(filter(None, [it.get("id", ""), it.get("name", "")] +
                           [u.get("uri", "") for u in (it.get("login") or {}).get("uris", [])])).lower()
-    authorized = any(sc.lower() in hay or sc.lower() == it.get("id", "").lower()
-                     for sc in state["scopes"])
+    # '*' is a deliberate whole-vault scope. Which credential a mail will demand is not
+    # knowable in advance, so an item-by-item list can only be built by interrupting the
+    # human once per miss — which is the cost this exists to remove.
+    authorized = ("*" in state["scopes"] or
+                  any(sc.lower() in hay or sc.lower() == it.get("id", "").lower()
+                      for sc in state["scopes"]))
     return it, authorized, None
 
 
@@ -170,7 +183,7 @@ def handle(req):
         except Exception as e:
             log("sync err on unlock: %s" % e)
         log("unlocked; authorized now: %s" % scopes)
-        return {"ok": True, "scopes": scopes, "ttl_hours": AUTOLOCK_HOURS, "added": sorted(items)}
+        return {"ok": True, "scopes": scopes, "ttl_hours": (AUTOLOCK_HOURS if AUTOLOCK_HOURS > 0 else None), "added": sorted(items)}
 
     if cmd == "lock":
         with slock:
@@ -182,7 +195,7 @@ def handle(req):
     if cmd == "status":
         with slock:
             unlocked = bool(state["session"])
-            left = max(0, AUTOLOCK_HOURS * 3600 - (time.time() - state["unlocked_at"])) if unlocked else 0
+            left = (max(0, AUTOLOCK_HOURS * 3600 - (time.time() - state["unlocked_at"])) if unlocked else 0) if AUTOLOCK_HOURS > 0 else None
             scopes = sorted(state["scopes"])
             sync_age = int(time.time() - state["last_sync"]) if state["last_sync"] else None
         return {"unlocked": session_ok(), "seconds_left": int(left), "scopes": scopes, "sync_age": sync_age}

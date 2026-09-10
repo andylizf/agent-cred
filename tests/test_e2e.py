@@ -149,8 +149,26 @@ class E2E(unittest.TestCase):
         self.assertNotEqual(rc, 0)
         self.assertIn("usage", (o + e).lower())
 
+    def test_wildcard_scope_authorizes_everything(self):
+        # "*" is the explicit blanket grant. It still needs the master password, so an agent
+        # cannot reach it on its own; what it changes is the blast radius of one human unlock.
+        rc, o, e = self.cred("unlock", "*", pw=PW)
+        self.assertIn("cred: UNLOCKED", o)
+        for item, secret in (("github.com", "gh-secret"), ("aws-prod", "aws-secret")):
+            rc, o, e = self.cred("with", item, "-c", 'printf %s "$CRED"')
+            self.assertEqual(o, secret, "wildcard should authorize " + item)
+
+    def test_wildcard_still_needs_the_master_password(self):
+        rc, o, e = self.cred("unlock", "*", pw="wrong-pw")
+        self.assertIn("cred: ERROR", o)
+        self.assertNotEqual(rc, 0)
+        rc, o, e = self.cred("with", "github.com", "-c", 'printf %s "$CRED"')
+        self.assertNotEqual(rc, 0)
+        self.assertNotIn("gh-secret", o + e)
+
     def test_unlock_requires_item(self):
-        rc, o, e = self.cred("unlock")                 # whole-vault mode is gone
+        # The bare no-argument form is gone; whole-vault access is the explicit "*" scope above.
+        rc, o, e = self.cred("unlock")
         self.assertNotEqual(rc, 0)
         self.assertIn("usage", (o + e).lower())
 
