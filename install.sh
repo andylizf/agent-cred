@@ -5,9 +5,28 @@ set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
 BIN="${BIN:-$HOME/.local/bin}"
-RUN_DIR_DEFAULT="$HOME/.cred"
 PY="$(command -v python3 || true)"
 [ -n "$PY" ] || { echo "error: python3 not found on PATH" >&2; exit 1; }
+
+# The daemon reads run_dir from ~/.config/cred/config.json; the service must log to the
+# same place, so honour an existing config instead of assuming ~/.cred.
+CFG="${CRED_CONFIG:-$HOME/.config/cred/config.json}"
+RUN_DIR_DEFAULT="$("$PY" - "$CFG" <<'PYEOF'
+import json, os, sys
+try:
+    rd = json.load(open(sys.argv[1])).get("run_dir") or "~/.cred"
+except Exception:
+    rd = "~/.cred"
+print(os.path.expanduser(rd))
+PYEOF
+)"
+
+# launchd/systemd start the daemon with a bare PATH, and the daemon shells out to `bw`
+# (config bw_bin). Bake the directory `bw` lives in now into the service so an unlock
+# does not fail with "bw: not found" only when started by the service manager.
+BW_PATH="$(command -v bw || true)"
+SERVICE_PATH="$BIN:/usr/local/bin:/usr/bin:/bin"
+[ -n "$BW_PATH" ] && SERVICE_PATH="$(dirname "$BW_PATH"):$SERVICE_PATH"
 
 echo "→ installing cred + cred-brokerd.py to $BIN"
 mkdir -p "$BIN"
@@ -34,6 +53,8 @@ case "$(uname -s)" in
   <key>Label</key><string>ai.agent-cred.brokerd</string>
   <key>ProgramArguments</key>
   <array><string>$PY</string><string>$BIN/cred-brokerd.py</string></array>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>$SERVICE_PATH</string></dict>
   <key>KeepAlive</key><true/>
   <key>RunAtLoad</key><true/>
   <key>ProcessType</key><string>Background</string>
@@ -42,6 +63,14 @@ case "$(uname -s)" in
 </dict>
 </plist>
 EOF
+    LEGACY="$HOME/Library/LaunchAgents/local.cred-broker.plist"
+    # A hand-rolled `local.cred-broker` label predates this installer on some machines;
+    # two services would fight over the socket, so it is unloaded and kept as .retired.
+    if [ -f "$LEGACY" ]; then
+      echo "→ retiring legacy service local.cred-broker ($LEGACY → $LEGACY.retired)"
+      launchctl unload "$LEGACY" 2>/dev/null || true
+      mv "$LEGACY" "$LEGACY.retired"
+    fi
     launchctl unload "$PLIST" 2>/dev/null || true
     launchctl load "$PLIST"
     echo "  loaded. (manage with: launchctl kickstart -k gui/\$(id -u)/ai.agent-cred.brokerd)"
@@ -54,6 +83,7 @@ EOF
 [Unit]
 Description=agent-cred credential broker daemon
 [Service]
+Environment=PATH=$SERVICE_PATH
 ExecStart=$PY $BIN/cred-brokerd.py
 Restart=always
 [Install]
@@ -61,6 +91,7 @@ WantedBy=default.target
 EOF
     systemctl --user daemon-reload
     systemctl --user enable --now agent-cred.service
+    systemctl --user restart agent-cred.service
     echo "  enabled. (manage with: systemctl --user restart agent-cred)"
     ;;
   *)
