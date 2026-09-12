@@ -22,11 +22,14 @@ PYEOF
 )"
 
 # launchd/systemd start the daemon with a bare PATH, and the daemon shells out to `bw`
-# (config bw_bin). Bake the directory `bw` lives in now into the service so an unlock
-# does not fail with "bw: not found" only when started by the service manager.
-BW_PATH="$(command -v bw || true)"
+# (config bw_bin), which is itself a `#!/usr/bin/env node` script when installed from
+# npm. Bake the directories `bw` and `node` live in now into the service so an unlock
+# does not fail with "bw: not found" / "node: not found" only under the service manager.
 SERVICE_PATH="$BIN:/usr/local/bin:/usr/bin:/bin"
-[ -n "$BW_PATH" ] && SERVICE_PATH="$(dirname "$BW_PATH"):$SERVICE_PATH"
+for tool in node bw; do
+  t="$(command -v "$tool" || true)"
+  [ -n "$t" ] && SERVICE_PATH="$(dirname "$t"):$SERVICE_PATH"
+done
 
 echo "→ installing cred + cred-brokerd.py to $BIN"
 mkdir -p "$BIN"
